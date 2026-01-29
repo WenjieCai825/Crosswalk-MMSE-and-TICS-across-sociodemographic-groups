@@ -1,0 +1,309 @@
+CrosswalkCodeDropbox
+================
+Wenjie Cai
+2025-08-13
+
+``` r
+library(dplyr)
+```
+
+    ## 
+    ## Attaching package: 'dplyr'
+
+    ## The following objects are masked from 'package:stats':
+    ## 
+    ##     filter, lag
+
+    ## The following objects are masked from 'package:base':
+    ## 
+    ##     intersect, setdiff, setequal, union
+
+``` r
+library(ggplot2)
+library(cogxwalkr)
+library(table1)
+```
+
+    ## 
+    ## Attaching package: 'table1'
+
+    ## The following objects are masked from 'package:base':
+    ## 
+    ##     units, units<-
+
+``` r
+library(patchwork)
+```
+
+``` r
+##################### load the crosswalk dataset: Change path here
+#####readRDS function failed to directly read rds file from dropbox
+#####you need to move the rds data to a local folder and use the path of this dataset from the local folder: change the path here. 
+pathWholeData<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/derived data/HRS-HCAPcrosswalkdata.rds"
+df<-readRDS(pathWholeData)
+```
+
+``` r
+#####################set the paths for the outcome RDS files: Change path here
+# due to the same issue of the readRDS function described above, we need to set the paths for the use in the crosswalk process, change them to your results paths accordingly
+results20path<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/noboot_r1mmse_score_cog_20.RDS"
+
+results27path<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/noboot_r1mmse_score_cog_27.RDS"
+
+results30path<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/noboot_r1mmse_score_cog_30.RDS"
+
+results35path<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/noboot_r1mmse_score_cog_35.RDS"
+
+results40path<-"/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/noboot_r1mmse_score_cog_40.RDS"
+```
+
+``` r
+# check the missingness in the outcomes and use complete case analysis
+# outcomes: r1mmse_score, cog_20, cog_27, cog_30, cog_35, cog_40
+#missingness in each outcome and conditional variable
+sum(is.na(df$r1mmse_score))
+sum(is.na(df$cog_20))
+sum(is.na(df$cog_27))
+sum(is.na(df$cog_35))
+sum(is.na(df$dementiaBPV))
+
+sum(complete.cases(df[, c("r1mmse_score", "cog_20", "cog_27", "cog_30", "cog_35", "cog_40")])) #use the 3236 for the whole sample analysis
+
+df1<- df[complete.cases(df[, c("r1mmse_score", "cog_20", "cog_27", "cog_30", "cog_35", "cog_40")]),]
+
+#supplementary table: comparison of the analytic sample and excluded sample
+df$excluded<-ifelse(complete.cases(df[, c("r1mmse_score", "cog_20", "cog_27", "cog_30", "cog_35", "cog_40")]),0, 1)
+
+df$female<-as.factor(df$female)
+df$QHouseholdIncome <- cut(
+df$h_itot2016,
+breaks = quantile(df1$h_itot2016, probs = c(0, 0.5, 1), na.rm = TRUE),
+include.lowest = TRUE,
+labels = c("Low", "High")
+)
+table1(~ PAGEGroup + female + RaceEthnicity + Educational_Attainment + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural + r1mmse_score + cog_20 + cog_27 + cog_30 + cog_35 + cog_40| excluded, data=df)
+```
+
+``` r
+#  Descriptive analysis: table 1
+va <- c("PAGEGroup", "female", "RaceEthnicity", 
+                    "Educational_Attainment", "Marital", 
+                    "WorkForce", "QHouseholdIncome", 
+                    "APOEGroup", "rural")
+df[va] <- lapply(df[va], as.factor)
+df1$female<-as.factor(df1$female)
+table1(~ PAGEGroup + female + RaceEthnicity + Educational_Attainment + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural, 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+```
+
+``` r
+#define crosswalk and plot function
+Crosswalk_Plot <- function (df) {
+  outcomes<- c("r1mmse_score", "cog_20", "cog_27", "cog_30", "cog_35", "cog_40")
+# Get all pairs
+pairs = t(combn(outcomes, 2))  # each row is (A, B)
+pair_names  =  apply(pairs, 1, function(x) paste(x[1], x[2], sep = "_VS_"))
+df$dementia<-df$dementiaBPV
+# Loop and run crosswalk
+for (i in seq_len(nrow(pairs))) {
+  start_time = Sys.time()
+  
+  message("Running crosswalk pair", i, ": ", pairs[i, 1], " => ", pairs[i, 2])
+  
+  var1 = pairs[i, 1]
+  var2 = pairs[i, 2]
+  dementia_var = 'dementia'
+  niter = 5000
+  
+  # Keep only the variables of interest
+  data.temp  =  df %>% dplyr::select(all_of(c(var1, var2, dementia_var)))
+  
+  # Remove rows with missing values
+  data.temp  =  data.temp %>% dplyr::filter(complete.cases(.))
+  
+  boot_settings  =  list(nboot = 1000, seed = 999, ncores = 28)
+  cw  =  crosswalk(
+    cog1 = var1,
+    cog2 = var2,
+    data = data.temp,
+    # control = boot_settings,
+    condition_by = dementia_var, 
+    niter = niter
+  )
+  
+  res = list(cog1 = var1,
+             cog2 = var2,
+             conditional_var = dementia_var,
+             cw.diffs = cw$diffs)
+             # cw.noboot = cw$boot 
+  
+  end_time = Sys.time()
+  elapsed = round(as.numeric(difftime(end_time, start_time, units = "secs")), 2)
+  
+  message("Finished: ", pairs[i, 1], " => ", pairs[i, 2], 
+          " | Time used: ", elapsed, " seconds")
+  
+  # print(paste0('boot_',pairs[i, 1], "_", pairs[i, 2],'.RDS'))
+  saveRDS(res,file=paste0("/Users/wenjiecai/Documents/research/Conference/2025 psyMCA/workgroup/R codes/",'noboot_',pairs[i, 1], "_", pairs[i, 2],'.RDS'))
+}
+
+#plots
+results20<-readRDS(results20path)
+p20<-ggplot(results20$cw.diffs,aes(x=r1mmse_score,y=cog_20)) +
+  geom_point() +
+  geom_smooth(method='lm',formula = y ~ x + 0, se=F, color='red') +
+  theme_minimal()
+
+results27<-readRDS(results27path)
+p27<-ggplot(results27$cw.diffs,aes(x=r1mmse_score,y=cog_27)) +
+  geom_point() +
+  geom_smooth(method='lm',formula = y ~ x + 0, se=F, color='red') +
+  theme_minimal()
+
+results30<-readRDS(results30path)
+p30<-ggplot(results30$cw.diffs,aes(x=r1mmse_score,y=cog_30)) +
+  geom_point() +
+  geom_smooth(method='lm',formula = y ~ x + 0, se=F, color='red') +
+  theme_minimal()
+
+results35<-readRDS(results35path)
+p35<-ggplot(results35$cw.diffs,aes(x=r1mmse_score,y=cog_35)) +
+  geom_point() +
+  geom_smooth(method='lm',formula = y ~ x + 0, se=F, color='red') +
+  theme_minimal()
+
+results40<-readRDS(results40path)
+p40<-ggplot(results40$cw.diffs,aes(x=r1mmse_score,y=cog_40)) +
+  geom_point() +
+  geom_smooth(method='lm',formula = y ~ x + 0, se=F, color='red') +
+  theme_minimal()
+
+(p20 | p27 | p30) /
+(p35 | p40)
+}
+```
+
+``` r
+# crosswalk in whole study population
+Crosswalk_Plot (df = df1)
+```
+
+``` r
+#crosswalk in subgroups: an overall view on subgroups
+# PAGEGroup
+# female
+# RaceEthnicity
+# Educational_Attainment
+# APOEGroup
+# QHouseholdIncome
+# rural
+```
+
+``` r
+#descriptive table among subgroups
+table1(~  female + RaceEthnicity + Educational_Attainment + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural |PAGEGroup , 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+
+table1(~  PAGEGroup + RaceEthnicity + Educational_Attainment + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural |female , 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+
+table1(~  PAGEGroup + female + Educational_Attainment + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural |RaceEthnicity , 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+
+table1(~  PAGEGroup + female + RaceEthnicity + Marital + WorkForce + QHouseholdIncome + APOEGroup + rural |Educational_Attainment , 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+
+table1(~  PAGEGroup + female + RaceEthnicity + Educational_Attainment + Marital + WorkForce + APOEGroup + rural |QHouseholdIncome , 
+       data=df1,
+       render = function(missing=TRUE, ...) {
+         table1::render.default(missing=TRUE, ...)
+        } )
+
+table1(~ PAGEGroup + female + RaceEthnicity + Educational_Attainment + Marital + 
+         WorkForce + QHouseholdIncome + rural | APOEGroup,
+       data = subset(df1, !is.na(APOEGroup)))
+
+table1(~ PAGEGroup + female + RaceEthnicity + Educational_Attainment + Marital + 
+         WorkForce + QHouseholdIncome + APOEGroup | rural,
+       data = subset(df1, !is.na(rural)))
+```
+
+``` r
+# PAGEGroup
+table(df1$PAGEGroup)
+Age1<-subset(df1, df1$PAGEGroup=="65–69")
+Age2<-subset(df1, df1$PAGEGroup=="70–74")
+Age3<-subset(df1, df1$PAGEGroup=="75–79")
+Age4<-subset(df1, df1$PAGEGroup=="80+")
+Crosswalk_Plot (df = Age1)
+Crosswalk_Plot (df = Age2)
+Crosswalk_Plot (df = Age3)
+Crosswalk_Plot (df = Age4)
+
+# female
+table(df1$female)
+female<-subset(df1, df1$female==1)
+male<-subset(df1, df1$female==0)
+Crosswalk_Plot (df = female)
+Crosswalk_Plot (df = male)
+
+# RaceEthnicity
+table(df1$RaceEthnicity)
+NonHisWhite<-subset(df1, df1$RaceEthnicity=="Non-hispanic white")
+NonHisBlack<-subset(df1, df1$RaceEthnicity=="Non-hispanic black")
+Hispanic<-subset(df1, df1$RaceEthnicity=="Hispanic")
+Crosswalk_Plot (df = NonHisWhite)
+Crosswalk_Plot (df= NonHisBlack)
+Crosswalk_Plot (df = Hispanic)
+
+# Educational_Attainment
+table(df1$Educational_Attainment)
+LessHigh<-subset(df1, df1$Educational_Attainment=="<high school")
+HighSchool<-subset(df1, df1$Educational_Attainment=="High school")
+SomeCollege<-subset(df1, df1$Educational_Attainment=="Some college")
+BeyondCollege<-subset(df1, df1$Educational_Attainment=="Education beyond college")
+Crosswalk_Plot (df = LessHigh)
+Crosswalk_Plot (df = HighSchool)
+Crosswalk_Plot (df = SomeCollege)
+Crosswalk_Plot (df = BeyondCollege)
+
+# QHouseholdIncome
+table(df1$QHouseholdIncome)
+Q1<-subset(df1, df1$QHouseholdIncome=="Q1")
+Q2<-subset(df1, df1$QHouseholdIncome=="Q2")
+Q3<-subset(df1, df1$QHouseholdIncome=="Q3")
+Q4<-subset(df1, df1$QHouseholdIncome=="Q4")
+Crosswalk_Plot (df = Q1)
+Crosswalk_Plot (df = Q2)
+Crosswalk_Plot (df = Q3)
+Crosswalk_Plot (df = Q4)
+
+# APOEGroup
+table(df1$APOEGroup)
+carrier<-subset(df1, df1$APOEGroup=="APOEe4 carrier")
+noncarrier<-subset(df1, df1$APOEGroup=="APOEe4 non-carrier")
+Crosswalk_Plot (df = carrier)
+Crosswalk_Plot (df = noncarrier)
+
+# rural
+table(df1$rural)
+urban<-subset(df1, df1$rural=="Urban/suburban")
+rural<-subset(df1, df1$rural=="Rural")
+Crosswalk_Plot (df = urban)
+Crosswalk_Plot (df = rural)
+```
